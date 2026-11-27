@@ -84,12 +84,19 @@ Invoke-Checked git -C $SourceDir checkout --detach $UpstreamSha
 
 Remove-DirectorySafe -Path $BuildDir
 
-Invoke-Checked cmake `
-    -S $SourceDir `
-    -B $BuildDir `
-    -G Ninja `
-    -DCMAKE_BUILD_TYPE=Release `
-    -DBUILD_SHARED_LIBS=ON
+$cmakeArgs = @(
+    "-S", $SourceDir,
+    "-B", $BuildDir,
+    "-G", "Ninja",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DBUILD_SHARED_LIBS=ON"
+)
+
+if ($Rid -eq "win-arm64") {
+    $cmakeArgs += "-DCMAKE_SYSTEM_PROCESSOR=ARM64"
+}
+
+Invoke-Checked cmake @cmakeArgs
 
 Invoke-Checked cmake --build $BuildDir --config Release --parallel
 
