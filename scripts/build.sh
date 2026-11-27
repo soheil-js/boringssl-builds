@@ -20,7 +20,12 @@ case "${RID}" in
     ;;
 esac
 
-for tool in git cmake ninja python3; do
+REQUIRED_TOOLS=(git cmake ninja python3 go perl)
+if [[ "${RID}" == "linux-x64" || "${RID}" == "osx-x64" ]]; then
+  REQUIRED_TOOLS+=(nasm)
+fi
+
+for tool in "${REQUIRED_TOOLS[@]}"; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "Required tool not found: ${tool}" >&2
     exit 1
@@ -34,10 +39,14 @@ echo " Upstream revision: ${UPSTREAM_SHA}"
 echo "========================================"
 
 if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
-  git clone https://github.com/google/boringssl.git "${SOURCE_DIR}"
+  rm -rf "${SOURCE_DIR}"
+  git clone --filter=blob:none https://github.com/google/boringssl.git "${SOURCE_DIR}"
 fi
 
-git -C "${SOURCE_DIR}" fetch origin
+git -C "${SOURCE_DIR}" fetch --origin origin --prune
+if [[ "${UPSTREAM_SHA}" != "HEAD" ]]; then
+  git -C "${SOURCE_DIR}" fetch --depth=1 origin "${UPSTREAM_SHA}"
+fi
 git -C "${SOURCE_DIR}" checkout --detach "${UPSTREAM_SHA}"
 
 rm -rf "${BUILD_DIR}"
@@ -58,4 +67,10 @@ python3 "${ROOT_DIR}/scripts/package.py" \
   --output "${OUTPUT_DIR}" \
   --upstream-sha "${UPSTREAM_SHA}"
 
-echo "Build and packaging completed: ${OUTPUT_DIR}/boringssl-${RID}.zip"
+ZIP_PATH="${OUTPUT_DIR}/boringssl-${RID}.zip"
+if [[ ! -f "${ZIP_PATH}" ]]; then
+  echo "Expected output package was not created: ${ZIP_PATH}" >&2
+  exit 1
+fi
+
+echo "Build and packaging completed: ${ZIP_PATH}"

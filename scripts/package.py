@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import sys
 import zipfile
 from pathlib import Path
@@ -25,21 +26,43 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _handle_remove_readonly(func, path: str, exc_info) -> None:
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
+def remove_tree_safe(target: Path) -> None:
+    if not target.exists():
+        return
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=_handle_remove_readonly)
+    else:
+        shutil.rmtree(target, onerror=_handle_remove_readonly)
+
+
 def find_one(root: Path, names: list[str]) -> Path:
     matches: list[Path] = []
 
     for name in names:
-        matches.extend(
-            p for p in root.rglob(name)
-            if p.is_file() and not p.is_symlink()
-        )
+        for p in root.rglob(name):
+            if not p.is_file() or p.is_symlink():
+                continue
+            if p.stat().st_size <= 0:
+                continue
+            # Avoid picking up test/tool artifacts if a shared library also exists
+            lower_parts = {part.lower() for part in p.parts}
+            if "test" in lower_parts or "tests" in lower_parts:
+                continue
+            matches.append(p)
 
-    # Prefer the shallowest matching path to avoid accidentally choosing
-    # a copy from a test or auxiliary directory.
+    # Prefer the shallowest matching path among valid non-empty files.
     unique = sorted(set(matches), key=lambda p: (len(p.parts), str(p)))
     if not unique:
         raise FileNotFoundError(
-            f"Could not find any of {names!r} under {root}"
+            f"Could not find any valid non-empty file matching {names!r} under {root}"
         )
 
     if len(unique) > 1:
@@ -56,7 +79,9 @@ def copy_headers(source: Path, destination: Path) -> None:
     if not headers.is_dir():
         raise FileNotFoundError(f"Public headers directory not found: {headers}")
 
-    shutil.copytree(headers, destination / "include" / "openssl")
+    target_headers = destination / "include" / "openssl"
+    remove_tree_safe(target_headers)
+    shutil.copytree(headers, target_headers)
 
 
 def sha256(path: Path) -> str:
@@ -87,9 +112,12 @@ def main() -> None:
 
     package_root = output / f"boringssl-{args.rid}"
     archive = output / f"boringssl-{args.rid}.zip"
+    temp_archive = output / f".boringssl-{args.rid}.zip.tmp"
 
-    if package_root.exists():
-        shutil.rmtree(package_root)
+    remove_tree_safe(package_root)
+    if temp_archive.exists():
+        temp_archive.unlink()
+
     package_root.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -103,8 +131,6 @@ def main() -> None:
     copied: list[Path] = []
 
     if args.rid.startswith("win-"):
-        # CMake's Windows shared targets normally produce crypto.dll/ssl.dll
-        # and the corresponding import libraries.
         shared_names = {
             "crypto": ["crypto.dll"],
             "ssl": ["ssl.dll"],
@@ -175,11 +201,8 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    if archive.exists():
-        archive.unlink()
-
     with zipfile.ZipFile(
-        archive,
+        temp_archive,
         mode="w",
         compression=zipfile.ZIP_DEFLATED,
         compresslevel=6,
@@ -190,6 +213,10 @@ def main() -> None:
                     file,
                     file.relative_to(package_root).as_posix(),
                 )
+
+    if archive.exists():
+        archive.unlink()
+    temp_archive.replace(archive)
 
     print(f"Created package: {archive}")
     print(f"Included files: {len(copied)} native libraries/import libraries")
