@@ -1,0 +1,194 @@
+name: Build BoringSSL
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    # Daily at 03:00 UTC.
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: boringssl-release
+  cancel-in-progress: false
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.upstream.outputs.sha }}
+      tag: ${{ steps.upstream.outputs.tag }}
+      exists: ${{ steps.upstream.outputs.exists }}
+    steps:
+      - name: Resolve upstream commit
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SHA="$(git ls-remote https://github.com/google/boringssl.git HEAD | awk '{print $1}')"
+          if [[ -z "$SHA" ]]; then
+            echo "Could not resolve the BoringSSL upstream HEAD."
+            exit 1
+          fi
+
+          TAG="boringssl-${SHA:0:12}"
+
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG does not exist."
+          fi
+
+  build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.exists == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-2025
+            arch: x64
+          - rid: win-arm64
+            os: windows-11-arm
+            arch: arm64
+          - rid: linux-x64
+            os: ubuntu-24.04
+            arch: x64
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+            arch: arm64
+          - rid: osx-x64
+            os: macos-15-intel
+            arch: x64
+          - rid: osx-arm64
+            os: macos-15
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout distribution repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install cmake ninja nasm strawberryperl -y --no-progress
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build nasm perl
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja nasm
+
+      - name: Build BoringSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/build.ps1 `
+            -Rid "${{ matrix.rid }}" `
+            -UpstreamSha "${{ needs.check-upstream.outputs.sha }}"
+
+      - name: Build BoringSSL
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash scripts/build.sh \
+            "${{ matrix.rid }}" \
+            "${{ needs.check-upstream.outputs.sha }}"
+
+      - name: Upload platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: boringssl-${{ matrix.rid }}
+          path: dist/boringssl-${{ matrix.rid }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs:
+      - check-upstream
+      - build
+    if: needs.check-upstream.outputs.exists == 'false'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download all platform packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: boringssl-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum boringssl-*.zip > SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-upstream.outputs.tag }}
+          UPSTREAM_SHA: ${{ needs.check-upstream.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          assets=(release-assets/*.zip release-assets/SHA256SUMS.txt)
+
+          if (( ${#assets[@]} != 7 )); then
+            echo "Expected six platform ZIPs and SHA256SUMS.txt; found ${#assets[@]} assets."
+            printf '%s\n' "${assets[@]}"
+            exit 1
+          fi
+
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BoringSSL ${TAG}" \
+            --latest \
+            --notes "Prebuilt shared BoringSSL libraries.
+
+          Upstream repository: https://github.com/google/boringssl
+          Upstream commit: ${UPSTREAM_SHA}
+
+          All packages were built from the same upstream commit with BUILD_SHARED_LIBS=ON.
+          Each ZIP contains the public headers and the platform's shared libraries.
+          See SHA256SUMS.txt for SHA-256 checksums."
