@@ -121,14 +121,6 @@ jobs:
           set -euo pipefail
           brew install cmake ninja nasm
 
-      - name: Verify required tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          for cmd in git cmake ninja go perl; do
-            command -v "$cmd" >/dev/null 2>&1 || { echo "Missing tool: $cmd"; exit 1; }
-          done
-
       - name: Build BoringSSL
         if: runner.os == 'Windows'
         shell: pwsh

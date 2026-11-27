@@ -42,7 +42,7 @@ function Remove-DirectorySafe {
                 $_.Attributes = $_.Attributes -bxor [System.IO.FileAttributes]::ReadOnly
             }
         } catch {
-            # Ignore attribute errors on locked/special items
+            # Ignore attribute errors on locked or special items
         }
     }
 
@@ -76,9 +76,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $SourceDir ".git"))) {
     Invoke-Checked git clone --filter=blob:none https://github.com/google/boringssl.git $SourceDir
 }
 
-Invoke-Checked git -C $SourceDir fetch --origin origin --prune
+Invoke-Checked git -C $SourceDir fetch origin --prune
 if ($UpstreamSha -ne "HEAD") {
-    Invoke-Checked git -C $SourceDir fetch --depth=1 origin $UpstreamSha
+    Invoke-Checked git -C $SourceDir fetch origin $UpstreamSha
 }
 Invoke-Checked git -C $SourceDir checkout --detach $UpstreamSha
 

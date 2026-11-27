@@ -43,9 +43,9 @@ if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
   git clone --filter=blob:none https://github.com/google/boringssl.git "${SOURCE_DIR}"
 fi
 
-git -C "${SOURCE_DIR}" fetch --origin origin --prune
+git -C "${SOURCE_DIR}" fetch origin --prune
 if [[ "${UPSTREAM_SHA}" != "HEAD" ]]; then
-  git -C "${SOURCE_DIR}" fetch --depth=1 origin "${UPSTREAM_SHA}"
+  git -C "${SOURCE_DIR}" fetch origin "${UPSTREAM_SHA}"
 fi
 git -C "${SOURCE_DIR}" checkout --detach "${UPSTREAM_SHA}"
 

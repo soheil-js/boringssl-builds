@@ -52,13 +52,11 @@ def find_one(root: Path, names: list[str]) -> Path:
                 continue
             if p.stat().st_size <= 0:
                 continue
-            # Avoid picking up test/tool artifacts if a shared library also exists
             lower_parts = {part.lower() for part in p.parts}
             if "test" in lower_parts or "tests" in lower_parts:
                 continue
             matches.append(p)
 
-    # Prefer the shallowest matching path among valid non-empty files.
     unique = sorted(set(matches), key=lambda p: (len(p.parts), str(p)))
     if not unique:
         raise FileNotFoundError(
